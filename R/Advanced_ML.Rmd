@@ -1,0 +1,1112 @@
+---
+title: "AML_Lab1"
+author: "Alejandro Garcia"
+date: "4 September 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(bnlearn)
+library(gRain)
+require(Rgraphviz)
+require(caret)
+```
+
+## Questions 
+
+1) In the first question we have to show that multiple runs of the hill-climbing algorithm can return non equivalent Bayesian network (BN) structures. The data we are using is "asia".  
+  
+The code below executes three times the hill-climb algorithm, changing the score to the different options like BIC, AIC or log likelihood. We can see that the different executions produce different graphs.These different graphs appear because we are using different score functions.  
+  
+```{r}
+
+data("asia")
+hill <- hc(asia)
+hill1 <- hc(asia, restart = 5,score = "loglik")
+hill2 <- hc(asia, restart = 4, score = "aic")
+
+
+```
+  
+When using the log likelihood we can see that the nodes are totally connected, that means that any minimum relation that the data shows, even is if its only noise, will be showed in the graph. That happens because the condition for the log likelihood to create relation is weaker than the AIC or BIC.
+  
+```{r}
+plot(hill1, main ="logLik")
+cpdag(hill1)
+```
+    
+When looking at the Akaike Information Criterion (AIC) we can see that there are less connections between the nodes, that happens because the condition for the algorithm to create a connection between the nodes is stronger than the log likelihood.
+  
+```{r}
+plot(hill2, main= "AIC")
+cpdag(hill2)
+```
+  
+Finally, when using the Bayesian Information Criterion (BIC) we have even less connections than with the AIC, that means that the algorithm has the strongest condition of the three to generate a connection between nodes.
+  
+```{r}
+plot(hill, main= "BIC")
+cpdag(hill)
+```
+
+As the cpdag shows the different dags are different from each other. The different dags can also be because of the randomness of the hill climb algorithm, when we change the restart it will also generate another dag as the algorithm will start in another point. 
+
+
+2) In the second question we are asked to learn a BN from 80% of the Asia dataset. Learning both the structure and the parameters. Then we have to use the BN learned to classify the 20% of the Asia dataset in two classes: S=$yes$ and S=$no$.   
+  
+First we get the training datapoints and the test, sampling from the data. Then we use the hill-climb algorithm to get the BN and fit it with the train data.  
+  
+As we have to compare with the true Asian BN we have also computed that graph.  
+  
+```{r}
+
+trainSample <- sample(5000)[1:(5000*0.8)]
+train <- asia[trainSample,]
+testt <- asia[-trainSample,]
+test <- asia[-trainSample, -2]
+
+bnHc <- hc(train)
+fit <- bn.fit(bnHc, train, method="bayes")
+
+grainFit <- compile(as.grain(fit))
+dag <- model2network("[A][S][T|A][L|S][B|S][D|B:E][E|T:L][X|E]")
+fit2 <- bn.fit(dag, train, method="bayes")
+grainFit2 <- compile(as.grain(fit2))
+
+
+graphviz.compare(dag, bnHc)
+
+```
+  
+  
+On the plots above we can see the first one being the real BN, compared to the one we created. The only difference is that the one we trained doesn't have a connection from "A" to the rest of the graph.  
+  
+Following this part, we classify the 20% of the data for the smoke column.   
+  
+```{r}
+smoke <- c()
+
+for(i in 1:nrow(test)){
+  bn1 <- setFinding(grainFit, nodes=names(test), states=c(t(test[i,])))
+  smoke[i] <- querygrain(bn1, nodes=c("S"), evidence=bn1$evidence) 
+}
+
+smokee <- names(unlist(lapply(smoke, which.max)))
+res <- caret::confusionMatrix(table(smokee, testt[,2]))
+res
+```
+  
+The classification for the "S" is around 0.75 which is not a horrible result.
+  
+Then we classify the test data with the real graph.
+  
+```{r}
+
+
+smoke2 <- c()
+
+for(i in 1:nrow(test)){
+  bn2 <- setFinding(grainFit2, nodes=names(test), states=c(t(test[i,])))
+  smoke2[i] <- querygrain(bn2, nodes=c("S"), evidence=bn2$evidence) 
+}
+
+smokee2 <- names(unlist(lapply(smoke2, which.max)))
+caret::confusionMatrix(table(smokee2, testt[,2]))
+
+
+
+```  
+  
+As we can see we get the exact same result in both of the graphs.  
+  
+  
+3) In this part we are asked to do the same from question 2), but now we are only using the so-called Markov blanket of $S$. We are gonna use the nodes "L", "B", as they are the markov blanket .
+
+```{r}
+
+mb(fit, "S")
+
+```
+  
+```{r}
+
+smoke3 <- c()
+
+for(i in 1:nrow(test)){
+  bn3 <- setFinding(grainFit, nodes=c("L", "B"), states=c(t(test[i,c("L", "B")])))
+  smoke3[i] <- querygrain(bn3, nodes=c("S"), evidence=bn3$evidence) 
+}
+
+smokee3 <- names(unlist(lapply(smoke, which.max)))
+caret::confusionMatrix(table(smokee3, testt[,2]))
+
+
+
+```
+  
+For this part we are getting the exact same results as in the second exercise. This happens because even though every node is dependent on S becasue it's connected through a path, as B and L are the Markov Blanket of S the rest of the nodes are independent of S given B and L, thus B and L are all that is needed to classify S.
+  
+  
+  
+4) In this question we are asked to repeat the exercise 2), but using a Naive Bayes classifier. Then model the naive Bayes classifier by hand and classify again using the generated graph.
+
+All the observations are assumed to be independent from the class labeled "S" or smoke,  for the graphical representation of the 'naive Bayes' model for classification.  
+  
+```{r}
+
+dagNaive <- model2network("[S][A|S][L|S][B|S][D|S][E|S][X|S][T|S]")
+fitNaive <- bn.fit(dagNaive, train, method="bayes")
+naiveGrain <- as.grain(fitNaive)
+graphviz.plot(dagNaive)
+
+```
+  
+Following that, we classify the class "S" smoke. The probability distribution from the graph is:
+  
+  $p(A,B,C,D,E,L,S,T,X) = p(S)p(A|S)p(T|S)p(L|S)p(B|S)p(E|S)p(X|S)p(D|S)$
+  
+  
+```{r}
+
+smokeNaive <- c()
+
+for(i in 1:nrow(test)){
+  bnNaive <- setFinding(naiveGrain, nodes=names(test), states=c(t(test[i,])))
+  smokeNaive[i] <- querygrain(bnNaive, nodes=c("S"), evidence=bnNaive$evidence) 
+}
+
+smokeeNaive <- names(unlist(lapply(smokeNaive, which.max)))
+caret::confusionMatrix(table(smokeeNaive, testt[,2]))
+
+
+```
+  
+Using the naive Bayes classifier we get around 0.7 of accuracy.  
+  
+  
+5) The results we get from the different exercises are.  
+  
+The results we got on exercise 2, using the real graph and the one we obtained training the algorithm with the hill-climb algorithm are the same. The confusion matrix is equal, same accuracy, that happens because as we can see, the difference betweeen graphs are that the node "A" si not connected in the learned graph, while in the real graph it is connected. However, "A" doesn't have any relation to "S" so that means it won't have any impact in the result.  
+  
+In exercise 3, we have same result as exercise 2. This is happening for a similar reason as above, as we are using ("L","B") nodes, which are the nodes directly connected to "S" and the ones having an effect on the classification, as explained in 3.
+  
+In exercise 4, as we are using a naive Bayes classifier we are generating connection to the classified node that wouldn't correspond in the markov blanket, so for this reason the accuracy when classifying is lower.
+
+
+---
+title: "AML_Lab2"
+author: "Alejandro Garcia"
+date: "24 September 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(HMM)
+require(caret)
+require(entropy)
+```
+
+
+1)
+
+In this lab we are asked to generate a Hidden Markov Model were we have 10 sectors (states), in the form of a ring. At any given time point, the robot is in one of the sectors and decides with equal probability to stay in the same sector or move to the next one, that means that the probability of staying in the same sector and moving is 0.5. When we want to know in which state we are, there is an error of reporting that we are in state [i-2, i+2], which means that the emission probabilities will be 5 different ones.
+
+The emission probability is the probability that the output sector is [i-2, i+2] given that the current state is i.  
+   
+   
+```{r}
+transProbs = matrix(c(0.5,0.5,0,0,0,0,0,0,0,0,
+                      0,.5,.5,0,0,0,0,0,0,0,
+                      0,0,.5,.5,0,0,0,0,0,0,
+                      0,0,0,.5,.5,0,0,0,0,0,
+                      0,0,0,0,.5,.5,0,0,0,0,
+                      0,0,0,0,0,.5,.5,0,0,0,
+                      0,0,0,0,0,0,.5,.5,0,0,
+                      0,0,0,0,0,0,0,.5,.5,0,
+                      0,0,0,0,0,0,0,0,.5,.5,
+                      .5,0,0,0,0,0,0,0,0,.5),nrow=10)
+
+emissionProbs = matrix(c(.2,.2,.2,0,0,0,0,0,.2,.2,
+                      .2,.2,.2,.2,0,0,0,0,0,.2,
+                      .2,.2,.2,.2,.2,0,0,0,0,0,
+                      0,.2,.2,.2,.2,.2,0,0,0,0,
+                      0,0,.2,.2,.2,.2,.2,0,0,0,
+                      0,0,0,.2,.2,.2,.2,.2,0,0,
+                      0,0,0,0,.2,.2,.2,.2,.2,0,
+                      0,0,0,0,0,.2,.2,.2,.2,.2,
+                      .2,0,0,0,0,0,.2,.2,.2,.2,
+                      .2,.2,0,0,0,0,0,.2,.2,.2),nrow=10)
+#emissionProbs = diag(1,10,10)
+hmm <- initHMM(c("A", "B", "C", "D","E", "F", "G", "H", "I", "J"), c("A", "B", "C", "D","E", "F", "G", "H", "I", "J"), transProbs = t(transProbs), emissionProbs = t(emissionProbs))
+```
+
+2) We now simulate 100 times as asked in the report.
+
+```{r}
+
+set.seed(12345)
+sim <- simHMM(hmm, 100)
+
+```
+
+3) We calculate the filtering probabilities with the distribution below:
+
+  $p(z^t|x^{0:t}) = \frac{p(x^{0:t}, z^t)}{p(x^{0:t})}= \frac{\alpha(z^t)}{\sum_{z^t}\alpha(z^t)}$
+  
+
+
+
+```{r}
+logForwardProb <- forward(hmm, sim$observation)
+ForwardProb <- exp(logForwardProb)
+#ForwardProb
+```
+
+Smoothed probabilities with the distribution below:
+
+  $p(z^t|x^{0:t}) = \frac{p(x^{0:t}, z^t)}{p(x^{0:t})}= \frac{\alpha(z^t)\beta{z^t)}}{\sum_{z^t}\alpha(z^t)\beta(z^t)}$
+
+```{r}
+ForBackProb <- posterior(hmm, sim$observation)
+#ForBackProb
+```
+
+Where $\alpha(z^t) = p(x^{0:t}, z^t)$ and $\beta(z^t) = p(x^{t+1:T}|z^t)$ are calculated by the forward-backward algorithm. $\alpha(z^t)$ is calculated recursively forward and $\beta(z^t)$ is calculated recursively backwards.
+
+Viterbi, most probable path
+
+```{r}
+viterbiPath <- viterbi(hmm, sim$observation)
+#viterbiPath
+```
+
+
+4). In this part we compute the accuracy of the different probability distributions
+
+```{r}
+filtering <- names(logForwardProb[,1])[apply(exp(logForwardProb),2, which.max)]
+confusionMatrix(table(sim$states,filtering ))
+```
+
+```{r}
+smoothing <- names(ForBackProb[,1])[apply(ForBackProb,2, which.max)]
+confusionMatrix(table(sim$states,smoothing))
+```
+
+```{r}
+confusionMatrix(table(sim$states, viterbiPath))
+```
+
+5) We repeat the previous exercise with different simulate samples, in our case we repeat it 30 times. In all of the cases the smoothed accuracy is always higher than the forward and the viterbi. That happens because the smoothed gets the probabilities of the previous and next state, while the forward or viterbi only have the probabilities of the previous state. That gives the smoothed probability distribution a better accuracy.  
+
+```{r}
+
+forwardAc <- c()
+posteriorAc <-c()
+viterbiAc <- c()
+interval <- 1:30
+for(i in interval){
+  
+  simul <- simHMM(hmm, 100)
+  forw <- forward(hmm, simul$observation)
+  post <- posterior(hmm, simul$observation)
+  viter <- viterbi(hmm, simul$observation)
+  
+  forwardAc[i] <- confusionMatrix(table(simul$states,  names(forw[,1])[apply(exp(forw),2, which.max)]))$overall["Accuracy"]
+  posteriorAc[i] <- confusionMatrix(table(simul$states, names(post[,1])[apply(post,2, which.max)]))$overall["Accuracy"]
+  viterbiAc[i] <- confusionMatrix(table(simul$states, viter))$overall["Accuracy"]
+  }
+
+data1 <- data.frame(forward=forwardAc, smoothed = posteriorAc, viterbi = viterbiAc, x=interval)
+
+ggplot(data1)+
+  geom_line(aes(x=x, y=forward, color="forward"))+
+  geom_line(aes(x=x,y=smoothed,color="smoothed"))+
+  geom_line(aes(x=x, y = viterbi, color="viterbi"))+
+  labs(x="interval", y ="accuracy")
+
+```
+6)  In this part we are asked if it's true that with more observations we have a better accuracy. One would say that normally in a system, the more observations you have the better you know the system. However, in this system there for each new observation we also have a noise following. For that reason, even if we have more observations we won't have a better knowledge about the position of the robot.
+
+The plot below shows how the entropy increases with the number of observations in the system, however this plot is not the one we need.
+
+```{r echo=FALSE}
+# set.seed(12345)
+# 
+# samples <- seq(100,1000,20)
+# dataplot <- data.frame(states=c(), forward=c(), posterior=c())
+# 
+# for(i in samples){
+#   simulate
+#   multisim <- simHMM(hmm, i)
+# 
+#  # forward
+#   forwardmulti <- forward(hmm, multisim$observation)
+#   forwardedmulti <- names(forwardmulti[,1])[apply(forwardmulti,2, which.max)]
+# 
+#   #forward-backward
+#   posteriormulti <- posterior(hmm, multisim$observation)
+#   smoothedmulti <- names(posteriormulti[,1])[apply(posteriormulti,2, which.max)]
+# 
+#   #entropy calculation
+#   statesentropy <- entropy.empirical(summary(as.factor(multisim$states)))
+#   forwardentro <- entropy.empirical(summary(as.factor(forwardedmulti)))
+#   smoothedentro <- entropy.empirical(summary(as.factor(smoothedmulti)))
+# 
+#   dataplot <- rbind(dataplot, data.frame(entropy = statesentropy, forward = forwardentro, posterior=smoothedentro))
+# }
+# ggplot(dataplot)+
+#  geom_line(aes(x=samples, y = entropy, color="states"))+
+#   geom_line(aes(x=samples, y = forward, color="forward"))+
+#   geom_line(aes(x=samples, y= posterior, color="posterior"))
+```
+
+In this plot we can observe how with a 100 sampled observations, when we calculate the entropy for each observation, the entropy doesn't converge or decrease. The lower the entropy of a system, the more order it will have, so it would mean that we have a better understanding of the system. 
+
+Shannon entropy is defined as:
+
+  $H = -\sum_ip_ilog_bp_i$
+
+
+
+```{r}
+
+plotting <- data.frame(iter =c(), entropy <- c())
+
+simu <- simHMM(hmm,100)
+forwardd <- exp(forward(hmm, simu$observation))
+entrop <- apply(forwardd,2, entropy.empirical )
+datapp <- data.frame(sample=1:100, entropy=entrop)
+
+ggplot(datapp)+geom_line(aes(x=sample, y=entropy))
+
+```
+
+
+7) We can see that the probability distribution of the next state [101], will be around 2-4. The step 100 has probabilities around 2-3, which means that the robot is in those states, however when we multiply for the transition matrix, we can observe that there is also the probability of moving to state 4, meaning that the next step is between the states mentioned before.
+
+The probability distribution of the hidden states for the following time step T + 1 of a sample of T time points is calculated with: 
+
+  $p(Z^{T+1}|x^{0:T} = \sum_{Z^T}p(Z^{T+1}|Z^T,x^{0:T})p(Z^T|x^{0:T})$
+  
+and because $Z^{T+1} \perp x^{0:T}|Z^T$ it can be written as:
+
+  $p(Z^{T+1}|x^{0:T}) = \sum_{Z^T}p(Z^{T+1}|Z^T)p(Z^T|x^{0:T})$
+  
+```{r}
+ForBackProb[,100]
+d<-ForBackProb[,100]%*%hmm$transProbs
+plot(as.vector(d))
+
+```
+
+---
+title: "AML_Lab3"
+author: "Alejandro Garcia"
+date: "2 October 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(ggplot2)
+require(gridExtra)
+```
+
+## State Space Models
+
+In this assignment we are asked to implement the particle filter for robot localization. The robot moves along the horizontal axis according to the following **SSM**:
+
+**Transition model:**
+$p(z_t |z_{t-1})=(N(z_t |z_{t-1},1)+N(z_t |z_{t-1}+1,1)+N(z_t |z_{t-1}+2,1))/3$
+
+**Emission model:**
+$p(x_t |z_{t})=(N(x_t |z_t,1)+N(x_t |z_t-1,1)+N(x_t |z_t+1,1))/3$
+
+**Initial model:**
+$p(z_1)=Uniform(0,100)$
+
+1. *Implement the SSM above.Simulate the SSM for T=100 time steps to obtain* $z_{1:100}$ *and* $x_{1:100}$. *Use the observations to identify the state via particle filtering. Use 100 particles. Show the particles, the expected location and the true location for the first and last time steps, as well as for two intermediate time steps of your choice.*
+
+
+```{r}
+generate_data <- function(variance){
+  
+  zt <- runif(100, 0, 100)
+  
+  #Transition model
+  for(i in 1:99){
+    model <- c()
+    model[1] <- rnorm(1,zt[i], 1)
+    model[2] <- rnorm(1,zt[i]+1, 1)
+    model[3] <- rnorm(1,zt[i]+2, 1)
+    zt[i+1] <- model[sample(1:3,1)]
+  }
+  
+  
+  xt <- vector(length = 100)
+  
+  #Emission model
+  for(i in 1:100){
+    model <- c()
+    model[1] <- rnorm(1,zt[i], variance)
+    model[2] <- rnorm(1,zt[i]+1, variance)
+    model[3] <- rnorm(1,zt[i]-1, variance)
+    xt[i] <- model[sample(1:3,1)]
+  }
+  return(data.frame(real = zt, obs = xt))
+}
+
+dataVar1 <- generate_data(1)
+
+```
+
+
+\newpage
+We now implement *Particle Filtering* which approximates the the state space of our robot by a random sample of $bel(x_t)$ . The particles (in our case 100) are the samples of the posterior distribution at each time step t. 
+
+This algorithm is made of the following steps:
+
+1. **Initialization**: we set the initial weights to 1/n Particles and the initial believe ($Z[1,]$, first set of particles) sampling from a uniform distribution from 0 to 100 ($p(x_0)$);
+
+2. **Prediction**: we calculate each particle at time $t$ using the state transition probability and the same particle at time $t-1$.
+
+3. **Importance Weight**: we calculate the *importance factor*, used to incorporate the observations from simulations into the particle set and they represent the probability of the measurement $z_t$ under the particle m at time t.
+
+4. **Correction**: after building the temporary set of particles and the respective weights, we want to resample. The probability of drawing each particle is given by its importance weight, now the particles are distributed according to the posterior
+
+```{r}
+partic_filter <- function(xt, variance){
+  M<-100
+  chi <- c()
+  
+  #Initialization
+  chi <- runif(M, 0, 100)
+  pred <- matrix(vector(length=100*M), nrow=M)
+  pred[,1] <- chi
+  expected <- c()
+  expected[1] <- rep(1,100)%*%chi/100
+  for(t in 2:100){
+    chihat <- c()
+    w <- c()
+    for(m in 1:M){
+      model <- c()
+      model[1] <- rnorm(1,chi[m], 1)
+      model[2] <- rnorm(1,chi[m]+1, 1)
+      model[3] <- rnorm(1,chi[m]+2, 1)
+      xtm <- model[sample(1:3,1)]
+      w[m] <- (dnorm(xtm, xt[t], variance)+
+                 dnorm(xtm, xt[t]+1, variance)+
+                 dnorm(xtm, xt[t]-1, variance))/3
+      chihat[m] <- xtm
+    }
+    probs <- cumsum(w/sum(w))
+    for(m in 1:M){
+        chi[m] <- chihat[findInterval(runif(1), probs)+1]
+    }
+    pred[,t] <- chi
+    expected[t] <- w%*%chi/sum(w)
+    
+  }
+  return(list(pred,expected))
+}
+```
+
+
+
+```{r warning=FALSE, echo=FALSE}
+set.seed(12345)
+
+var <- 1
+particle <- partic_filter(dataVar1$obs, var)
+pred <- particle[[1]]
+expected <- as.vector(unlist(particle[2]))
+data <- data.frame(expected <- expected, obs = pred , real = dataVar1$real,realObs = dataVar1$obs)
+
+plot_hist <- function(data){
+  
+  hist1 <- ggplot(data)+
+    geom_histogram(aes(obs.1))+
+    geom_vline(aes(xintercept=data$realObs[1],colour="observation"))+
+    geom_vline( aes(xintercept = data$real[1],colour="true value"))+
+    geom_vline(aes(xintercept=data$expected[1], colour="expected"))
+  hist2 <- ggplot(data)+
+    geom_histogram(aes(obs.100))+
+    geom_vline(aes(xintercept=data$realObs[100],colour="observation"))+
+    geom_vline( aes(xintercept = data$real[100],colour="true value"))+
+    geom_vline(aes(xintercept=data$expected[100], colour="expected"))
+
+  hist3 <- ggplot(data)+
+    geom_histogram(aes(obs.35))+
+    geom_vline(aes(xintercept=data$realObs[35],colour="observation"))+
+    geom_vline( aes(xintercept = data$real[35],colour="true value"))+
+    geom_vline(aes(xintercept=data$expected[35], colour="expected"))
+  
+  hist4 <- ggplot(data)+
+    geom_histogram(aes(obs.75))+
+    geom_vline(aes(xintercept=data$realObs[75],colour="observation"))+
+    geom_vline( aes(xintercept = data$real[75],colour="true value"))+
+    geom_vline(aes(xintercept=data$expected[75], colour="expected"))
+  
+  suppressMessages(grid.arrange(hist1, hist2,hist3, hist4, nrow=2))
+}
+plot_graph <- function(pred,data){
+  N <- 100
+  M <- 100
+  locations <- data.frame(index = 1:N, 
+                            true_location = data$real,
+                            observations = data$realObs,
+                            exp_location = data$expected)
+  
+  partikel <- data.frame(index = rep(1:N , M), 
+                           particle = as.vector(t(pred)))
+  
+  
+  ggplot(partikel, aes(x = index), colour = "grey") +
+      xlab("Time") +
+      theme_bw() +
+      geom_point(aes(y = particle, color = "Particle"), size=1) + 
+      geom_line(data = locations, aes(y = true_location, color = "True location"), size=0.8) +
+      geom_line(data = locations, aes(y = observations, color = "Observation"), size=0.8)+ 
+      geom_line(data= locations, aes(y = exp_location, color = "Expected"), size=0.8) 
+
+}
+
+plot_graph(pred,data)
+plot_hist(data)
+```
+ 
+  
+We can see that the distribution of the particles are quite accurate in this case. 
+  
+  
+\newpage
+
+2. *Repeat the exercise above replacing the standard deviation of the emission model with 5 and then with 50. Comment on how this affects the results.*
+  
+Changing the standard deviation from 1 to 5 we notice that the observations are a bit more instable and a bit far from the real states. Also the particles have different distributions, at each time step they have a bigger variance.
+
+```{r warning=FALSE, echo=FALSE}
+set.seed(12345)
+var <- 5
+dataVar5 <- generate_data(var)
+particle <- partic_filter(dataVar5$obs, var)
+pred <- particle[[1]]
+expected <- as.vector(unlist(particle[2]))
+data <- data.frame(expected <- expected, obs = pred , real = dataVar5$real,realObs = dataVar5$obs)
+
+plot_graph(pred, data)
+plot_hist(data)
+```
+ 
+  
+  
+  
+\newpage
+  
+Changing the standard deviation to 50 adds too much noise to the observations, they are very far apart from our actual states. In contrast to the observations, the particle filtering seems like getting closer to the actual state, without being too influenced by the noise. 
+  
+```{r echo=FALSE}
+set.seed(12345)
+var <- 50
+dataVar50 <- generate_data(var)
+particle <- partic_filter(dataVar50$obs, var)
+pred <- particle[[1]]
+expected <- as.vector(unlist(particle[2]))
+data <- data.frame(expected <- expected, obs = pred , real = dataVar50$real,realObs = dataVar50$obs)
+
+plot_graph(pred, data)
+plot_hist(data)
+
+```
+  
+   
+In this case the distribution of the particles is not very informative as the standard deviation is too big to give a proper distribution.
+   
+\newpage
+
+3. *Finally, show and explain what happens with the weights in the particle filter are always equal to 1 (there is not correction).*
+
+The following graph shows what happens when the weights are not updated but they are always equal to 1. 
+As we can see after the time step 1 the particles don't improve their knowledge and the particles are not distributed according to the posterior belief anymore.
+  
+```{r}
+
+partic_filter_noweight <- function(xt, variance){
+  M<-100
+  chi <- c()
+  
+  #Initialization
+  chi <- runif(100, 0, 100)
+  pred <- matrix(vector(length=10000), nrow=100)
+  pred[,1] <- chi
+  expected <- c()
+  expected[1] <- rep(1,100)%*%chi/100
+  for(t in 2:100){
+    chihat <- c()
+    w <- c()
+    for(m in 1:M){
+      model <- c()
+      model[1] <- rnorm(1,chi[m], 1)
+      model[2] <- rnorm(1,chi[m]+1, 1)
+      model[3] <- rnorm(1,chi[m]+2, 1)
+      xtm <- model[sample(1:3,1)]
+      w <- rep(1,100)
+      chihat[m] <- xtm
+    }
+    probs <- cumsum(w/sum(w))
+    for(m in 1:M){
+        chi[m] <- chihat[findInterval(runif(1), probs)+1]
+    }
+    pred[,t] <- chi
+    expected[t] <- w%*%chi/sum(w)
+  }
+  return(list(pred, expected))
+}
+
+```
+
+```{r warning= FALSE, echo=FALSE}
+set.seed(1234)
+
+var <- 1
+
+particle <- partic_filter_noweight(dataVar1$obs, var)
+pred <- particle[[1]]
+expected <- as.vector(unlist(particle[2]))
+data <- data.frame(expected <- expected, obs = pred , real = dataVar1$real,realObs = dataVar1$obs)
+
+plot_graph(pred, data)
+plot_hist(data)
+
+```
+  
+---
+title: "AML Lab 4"
+author: "Alejandro Garcia"
+date: "10 October 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(kernlab)
+require(AtmRay)
+require(caret)
+```
+
+## Gaussian Processes
+
+#Question 1 
+
+First we have to implement the Gaussian Process regression model:
+
+  $y = f(x) + \epsilon \sim N(0, \sigma_n^2)$ and $f \sim GP(0,k(x,x'))$
+
+
+1.1) We will use the Algorithm 2.1 in  Rasmussen and Williams book. 
+
+```{r}
+SquaredExpKernel <- function(x1,x2,sigmaF=1,l=3){
+  n1 <- length(x1)
+  n2 <- length(x2)
+  K <- matrix(NA,n1,n2)
+  for (i in 1:n2){
+    K[,i] <- sigmaF^2*exp(-0.5*((x1-x2[i])/l)^2)
+  }
+  return(K)
+}
+
+#K K(X, X) -> n × n covariance (or Gram) matrix
+#Kaht K(X, Xhat) the covariance between training and test cases
+#khat <- vector, short for K(X, x), when there is only a single test case
+#k(x,x') covariance (or kernel) function evaluated at x and x0
+
+posteriorGP <- function(X, y, Xstar, hyperParam, sigmaNoise, k = SquaredExpKernel){
+  
+  K <- k(X,X, hyperParam[1], hyperParam[2])
+  kstar <- k(X, Xstar, hyperParam[1], hyperParam[2])
+  
+  
+  L <- t(chol(K+(sigmaNoise*diag(ncol(K)))))
+  n <- nrow(L)
+  alpha = solve(t(L),(solve(L,y)))
+  
+  fstarhat <- t(kstar)%*%alpha
+  v <- solve(L,kstar)
+  
+  Vfstar <- k(Xstar, Xstar, hyperParam[1], hyperParam[2]) - (t(v)%*%v)
+  logpyX <- ((-1/2)*t(y)%*%alpha)- sum(log(diag(L)))-((n/2)*log(2*pi))
+  
+  return(data.frame(mean=fstarhat, variance=list(Vfstar), logmarg <- logpyX))
+  
+  
+}
+
+
+
+
+
+```
+
+1.2) Now we use values $\sigma_f=1$ and $l=0.3$. And update it with $(x, y) = (0:4; 0:719)$. We also assume tht $sigma_n = 0.1$ with a grid of $x \epsilon [-1,1]$. We also plot the 95% probability bands. 
+
+In the plot below can be seen how the probability bands get closer to the points that we are predicting, as we already know the result. 
+
+```{r}
+hyper <- c(1,0.3)
+obs <- c(0.4, 0.719)
+sigman <- 0.1
+xstar <- seq(-1,1,0.2)
+
+
+post <- posteriorGP(X=obs[1], y=obs[2], Xstar = xstar, sigmaNoise =  sigman ^2, hyperParam = hyper)
+vars <- as.vector(unlist(lapply( post[2:12], max)))
+interval_up <- post$mean + 1.96*sqrt(vars)
+interval_down <- post$mean - 1.96*sqrt(vars)
+
+
+plot(xstar,post$mean, ylim=c(-3,3))
+lines(xstar,interval_up, col="red")
+lines(xstar,interval_down, col="red")
+
+
+```
+
+1.3) Now we update the posterior (x, y) = (-0,6,-0,044). As we are adding another value to the posterior we can see how the bands also get closer to the point that we have added. 
+
+```{r}
+x <- c(0.4, -0.6)
+y <- c(0.719, -0.044)
+
+post <- posteriorGP(X=x, y=y, Xstar = xstar, sigmaNoise =  sigman^2, hyperParam = hyper)
+
+vars <- as.vector(unlist(lapply( post[2:12], max)))
+interval_up <- post$mean + 1.96*sqrt(vars)
+interval_down <- post$mean - 1.96*sqrt(vars)
+
+
+plot(xstar,post$mean, ylim=c(-3,3), type="l")
+points(x,y)
+lines(xstar, interval_up, col="red")
+lines(xstar, interval_down, col="red")
+
+
+```
+
+1.4) Now we use 5 data points, as we have seen in the previous points the probability bands get smaller in the points that we know, causing the points near them having a smaller probability band by proximity. 
+
+```{r}
+
+x <- c(-1,-.6,-.2,.4,.8)
+y <- c(0.768, -0.044, -0.94, 0.719, -0.664)
+
+post <- posteriorGP(X=x, y=y, Xstar = xstar, sigmaNoise =  sigman^2, hyperParam = hyper)
+
+vars <- as.vector(unlist(lapply( post[2:12], max)))
+interval_up <- post$mean + 1.96*sqrt(vars)
+interval_down <- post$mean - 1.96*sqrt(vars)
+
+
+plot(xstar,post$mean, ylim=c(-3,3), type="l")
+points(x,y)
+lines(xstar, interval_up, col="red")
+lines(xstar, interval_down, col="red")
+
+
+
+```
+
+1.5) When using $l= 1$ the bands get smoother, that happens because l is the smoothing variable which when incresed will make it smoother as the covariance matrix will be smaller.
+
+```{r}
+hyper <- c(1,1)
+post <- posteriorGP(X=x, y=y, Xstar = xstar, sigmaNoise =  sigman^2, hyperParam = hyper)
+
+vars <- as.vector(unlist(lapply( post[2:12], max)))
+interval_up <- post$mean + 1.96*sqrt(vars)
+interval_down <- post$mean - 1.96*sqrt(vars)
+
+
+plot(xstar, post$mean, ylim=c(-3,3), type="l")
+points(x,y)
+lines(xstar,interval_up, col="red")
+lines(xstar,interval_down, col="red")
+
+```
+
+#2 GP Regression with kernlab
+
+2.1 First we have to import and generate the data that we will use in the exercise. Then we are asked to print calculate the value of the exponential kernel $K(X, X_*)$ for the data points $X = (1,3,4)^T$ and $X_* = (2,3,4)^T$
+
+```{r}
+
+tempData <- read.csv("https://github.com/STIMALiU/AdvMLCourse/raw/master/GaussianProcess/
+Code/TempTullinge.csv", header=TRUE, sep=";")
+
+tempNotScale <- tempData[seq(1,2186, 5),]$temp
+
+
+timeNotScale <- seq(1,2186, 5)
+day <- rep(seq(1,365,5), 6)
+
+temp <- scale(tempNotScale)
+time <- scale(timeNotScale)
+
+Matern32 <- function(sigmaf = 1, ell = 1) 
+{
+  rval <- function(x1, x2 = NULL) {
+  n1 <- length(x1)
+  n2 <- length(x2)
+  K <- matrix(NA,n1,n2)
+  for (i in 1:n2){
+    K[,i] <- sigmaf^2*exp(-0.5*((x1-x2[i])/ell)^2)
+  }
+  return(K)
+  }
+  class(rval) <- "kernel"
+  return(rval)
+}
+
+x <- c(1,3,4)
+y <- c(2,3,4)
+
+MaternFunc <- Matern32()
+
+K <- kernelMatrix(kernel = MaternFunc, x = x, y= y)
+K
+
+
+```
+  
+2.2 In this part we consider the following model:  
+  
+  $temp = f(time) + \epsilon$ with $\epsilon \sim N(0,\sigma_n^2)$ and $f \sim GP(0,k(time,time'))$
+  
+  
+first we estimate the above Gaussian process regression model using the squared exponential function from (1) with $\sigma_f=20$ and $l=0.2$.  
+  
+As we can see the the process gives a good smoothed regression. However when changing the values of $l$ and $\sigma_f$ the regression changes, especially when modifying the values of $l$.  
+  
+
+```{r}
+
+ell<- 0.2
+sigmaf <- 20
+
+K <- kernelMatrix(kernel = MaternFunc, x = x, y= y)
+
+fit <- lm(tempNotScale ~ timeNotScale + I(timeNotScale^2))
+
+sigmaNoise <- sd(fit$residuals)
+plot(timeNotScale,tempNotScale)
+
+tempG <- gausspr(timeNotScale, tempNotScale, sigmaNoise = sigmaNoise^2,
+                    kernel = Matern32, kpar=list(sigmaf, ell))
+
+
+meanPred <- predict(tempG, timeNotScale) 
+
+lines(timeNotScale, meanPred, col="blue",lwd=2)
+```
+
+2.3 In this part of the exercise we have to plot the probability bands, in our case we will use the function posteriorGP that we implemented before to calculate the bands.  
+  
+We can see in the plot that the bands are quite small, tha happens because we have a good amount of data points and we are using the right hyperparamenters.
+  
+
+```{r}
+
+#posterior variance calculation
+fit <- lm(temp ~ time + I(time^2))
+sigmaNoise <- sd(fit$residuals)
+hyper <- c(sigmaf ,ell)
+xstar <- seq(length.out = 438, min(time),max(time))
+
+post <- posteriorGP(X=time, y=temp, Xstar = xstar, sigmaNoise =  sigmaNoise^2, hyperParam = hyper)
+
+vars <- as.vector(unlist(lapply( post[2:439], max)))
+interval_up <- post$mean + 1.96*sqrt(vars)
+interval_down <- post$mean - 1.96*sqrt(vars)
+
+
+plot(time,temp)
+lines(time, post$mean, col="blue", lwd="2")
+lines(time, interval_up, col="red")
+
+lines(time, interval_down, col="red")
+  
+
+
+
+
+
+```
+  
+2.4 Now we will use the variable day to generate the Gaussian Process.  
+  
+We can see how the regression gets lets smooth when using the variable day, and we have the same pattern for each year. That happens because the process is generating a "general" pattern for each year instead of considering each year different.  
+  
+  
+```{r}
+
+fit <- lm(tempNotScale ~ day + I(day^2))
+
+sigmaNoise <- sd(fit$residuals)
+plot(timeNotScale,tempNotScale)
+
+tempG <- gausspr(day, tempNotScale, sigmaNoise = sigmaNoise^2,
+                    kernel = Matern32, kpar=list(sigmaf, ell))
+
+meanPred <- predict(tempG, day) 
+lines(timeNotScale, meanPred,col="blue",lwd=2)
+
+```
+
+2.5 Now we will use a different kernel, the Periodic Kernel to generate another Gaussian Process taking the variable time.  
+  
+As we can see in the plot now we are cosidering that each year is different but that they still have some periodicity. This means that this GP is in between the first and second one.
+
+```{r}
+
+PeriodicKernel <- function(x1,x2,sigmaF=20,l1=1, l2=10, d= 365/sd(timeNotScale))
+  {
+  rval <- function(x1, x2 = NULL) {
+  n1 <- length(x1)
+  n2 <- length(x2)
+  K <- matrix(NA,n1,n2)
+  for (i in 1:n2){
+   K[,i] <- sigmaF^2*
+     exp(-2*(sin(pi*abs(x1-x2[i])/d)/l1)^2)*
+     exp(-0.5*(abs(x1-x2[i])/l2)^2)
+      
+  }
+  return(K)
+  }
+  class(rval) <- "kernel"
+  return(rval)
+}
+
+PeriodicFun <- PeriodicKernel()
+#posterior variance calculation
+fit <- lm(tempNotScale ~ timeNotScale + I(timeNotScale^2))
+sigmaNoise <- sd(fit$residuals)
+
+xstar <- seq(length.out = 438, min(time),max(time))
+
+#post <- posteriorGP(X=time, y=temp, Xstar = xstar, sigmaNoise =  sigmaNoise, hyperParam = hyper, k = PeriodicFun)
+post <- gausspr(x=timeNotScale, y=tempNotScale, var= sigmaNoise^2, kernel= PeriodicKernel, kpar=list())
+
+x <- time
+xs <- time
+n <- length(time)
+Kss <- kernelMatrix(kernel = PeriodicFun, x = x, y = x)
+Kxx <- kernelMatrix(kernel = PeriodicFun, x = xs, y = xs)
+Kxs <- kernelMatrix(kernel = PeriodicFun, x = x, y = xs)
+Covf = Kss-t(Kxs)%*%solve(Kxx + sigmaNoise^2*diag(n), Kxs) # Covariance matrix of fStar
+meanPred <- predict(post, timeNotScale) 
+
+
+
+plot(timeNotScale,tempNotScale)
+lines(timeNotScale, meanPred,col="blue",lwd=2)
+
+
+# Probability intervals for fStar
+lines(timeNotScale, meanPred - 1.96*sqrt(diag(Covf)), col = "red")
+lines(timeNotScale, meanPred + 1.96*sqrt(diag(Covf)), col = "red")
+
+# Prediction intervals for yStar
+lines(timeNotScale, meanPred - 1.96*sqrt((diag(Covf) + sigmaNoise^2)), col = "purple")
+lines(timeNotScale, meanPred + 1.96*sqrt((diag(Covf) + sigmaNoise^2)), col = "purple")
+
+
+
+
+
+```
+
+#3 Gaussian Process classification
+
+3.1) We now have to generate a Gaussian Process classification to classify the variable fraud in the dataset.
+  
+The confusion matrix shows that the classification is quite high using just varWave and skeWave around 93%, and plotting the contours of the prediction we can see that the contours are quite reasonable.
+
+```{r}
+
+data <- read.csv("https://github.com/STIMALiU/AdvMLCourse/raw/master/
+GaussianProcess/Code/banknoteFraud.csv", header=FALSE, sep=",")
+names(data) <- c("varWave","skewWave","kurtWave","entropyWave","fraud")
+data[,5] <- as.factor(data[,5])
+
+set.seed(111)
+SelectTraining <- sample(1:dim(data)[1], size = 1000,replace = FALSE)
+
+trainData <- data[SelectTraining,]
+testData <- data[-SelectTraining,]
+
+
+GPfraud <- gausspr(fraud ~ varWave + skewWave, data = trainData)
+
+confusionMatrix(table(predict(GPfraud, trainData[,1:2]), trainData[,5]))
+
+probPreds <- predict(GPfraud, trainData[,1:2], type="probabilities")
+x1 <- seq(min(trainData[,1]),max(trainData[,1]),length=100)
+x2 <- seq(min(trainData[,2]),max(trainData[,2]),length=100)
+gridPoints <- meshgrid(x1, x2)
+gridPoints <- cbind(c(gridPoints$x), c(gridPoints$y))
+
+gridPoints <- data.frame(gridPoints)
+names(gridPoints) <- names(trainData)[1:2]
+probPreds <- predict(GPfraud, gridPoints, type="probabilities")
+
+# Plotting for Prob(setosa)
+contour(x1,x2,t(matrix(probPreds[,1],100)), 20, xlab = "varWave", ylab = "skewWave", main = 'Fraud')
+points(trainData[trainData[,5]==0,1],trainData[trainData[,5]==0,2],col="red")
+points(trainData[trainData[,5]==1,1],trainData[trainData[,5]==1,2],col="blue")
+
+
+```
+```{r}
+
+contour(x1,x2,t(matrix(probPreds[,2],100)), 20, xlab = "varWave", ylab = "skewWave", main = 'Fraud')
+points(trainData[trainData[,5]==0,1],trainData[trainData[,5]==0,2],col="red")
+points(trainData[trainData[,5]==1,1],trainData[trainData[,5]==1,2],col="blue")
+```
+3.2) When classifying the test data we can see that the accuracy is even higher than the one from the training data. That may be luck because probably the test data points were inside the contours so were easier to classify.  
+  
+```{r}
+
+confusionMatrix(table(predict(GPfraud, testData[,1:2]), testData[,5]))
+
+
+```
+
+3.3) Finally when using the other variables to classify we can see that the accuracy increases to 99% which makes sense because we have more variables to relay on the classfication.
+
+```{r}
+
+GPfraud <- gausspr(fraud ~ varWave + skewWave + kurtWave + entropyWave, data = trainData)
+confusionMatrix(table(predict(GPfraud, testData[,1:4]), testData[,5]))
+
+
+
+
+```
+
+
+
+
+\newpage
+# **Appendix**
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE,warning=FALSE}
+```
+
+
+
+
+
+
